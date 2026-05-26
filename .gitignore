@@ -1,0 +1,30 @@
+# Python
+venv/
+.venv/
+.build-venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# PyInstaller
+build/
+dist/
+*.spec.bak
+*.pkg
+
+# 日志和运行时文件
+fx2md.log
+fx2md.pid
+
+# macOS
+.DS_Store
+assets/icon.iconset/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+
+

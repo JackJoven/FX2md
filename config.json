@@ -1,0 +1,8 @@
+{
+  "port": 9527,
+  "save_paths": [],
+  "filename_format": "{summary}",
+  "max_filename_length": 60,
+  "setup_completed": false,
+  "custom_save_paths": []
+}

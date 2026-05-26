@@ -1,0 +1,8 @@
+FX2md Notice
+=============
+
+FX2md is maintained as a modified edition based on the public project izscc/x2md.
+This repository changes the visible product name to FX2md and adds Feishu virtual table capture improvements.
+
+The upstream project did not include an explicit license in the copied source at the time this repository was prepared. Before public redistribution or commercial use, confirm that you have the required permission from the original rights holder.
+

@@ -1,0 +1,151 @@
+name: 构建跨平台安装包
+
+on:
+  # 手动触发（推荐：从 GitHub 页面点击 Run workflow）
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 1.0.0）'
+        required: false
+        default: '1.1.5'
+  # 推送 tag 时自动触发（如 git tag v1.0.0 && git push --tags）
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            platform: Mac
+            artifact_name: FX2md_Mac
+            icon_ext: icns
+          - os: windows-latest
+            platform: Windows
+            artifact_name: FX2md_Windows
+            icon_ext: ico
+
+    runs-on: ${{ matrix.os }}
+    name: 打包 ${{ matrix.platform }} 版
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: 安装依赖
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      # ── Mac 图标生成 ──
+      - name: 生成 Mac 图标 (.icns)
+        if: matrix.os == 'macos-latest'
+        run: |
+          mkdir -p assets/icon.iconset
+          python3 -c "
+          from PIL import Image
+          import os
+          src = Image.open('assets/icon.png')
+          sizes = [16, 32, 64, 128, 256, 512, 1024]
+          for s in sizes:
+              src.resize((s, s), Image.LANCZOS).save(f'assets/icon.iconset/icon_{s}x{s}.png')
+              if s <= 512:
+                  src.resize((s*2, s*2), Image.LANCZOS).save(f'assets/icon.iconset/icon_{s}x{s}@2x.png')
+          "
+          iconutil -c icns assets/icon.iconset -o assets/icon.icns
+
+      # ── Windows 图标生成 ──
+      - name: 生成 Windows 图标 (.ico)
+        if: matrix.os == 'windows-latest'
+        run: |
+          python -c "
+          from PIL import Image
+          img = Image.open('assets/icon.png')
+          img.save('assets/icon.ico', format='ICO', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])
+          "
+
+      # ── 打包 ──
+      - name: PyInstaller 打包
+        run: pyinstaller fx2md.spec --clean --noconfirm
+
+      # ── Mac: 压缩 .app ──
+      - name: 压缩 Mac .app
+        if: matrix.os == 'macos-latest'
+        run: |
+          cd dist
+          zip -r ../${{ matrix.artifact_name }}.zip FX2md.app
+
+      # ── Windows: 压缩文件夹 ──
+      - name: 压缩 Windows 文件夹
+        if: matrix.os == 'windows-latest'
+        run: |
+          Compress-Archive -Path dist\FX2md\* -DestinationPath ${{ matrix.artifact_name }}.zip
+
+      - name: 压缩浏览器扩展
+        if: matrix.os == 'macos-latest'
+        run: |
+          cd extension
+          zip -r ../FX2md_Extension.zip . -x "tests/*" "tests/**"
+
+      # ── 上传 Artifact ──
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.zip
+          retention-days: 30
+
+      - name: 上传扩展压缩包
+        if: matrix.os == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: FX2md_Extension
+          path: FX2md_Extension.zip
+          retention-days: 30
+
+  # ── 创建 Release（仅 tag 推送时） ──
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    name: 创建 Release
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载所有构建产物
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: 生成 SHA256 校验文件
+        run: |
+          sha256sum FX2md_Mac.zip FX2md_Windows.zip FX2md_Extension.zip > SHA256SUMS.txt
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: FX2md ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          files: |
+            FX2md_Mac.zip
+            FX2md_Windows.zip
+            FX2md_Extension.zip
+            SHA256SUMS.txt
+          draft: false
+          prerelease: false
+
+
+
+
