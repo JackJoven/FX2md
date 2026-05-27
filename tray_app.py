@@ -44,10 +44,18 @@ APP_DIR = get_app_dir()
 RESOURCE_DIR = get_resource_dir()
 CONFIG_FILE = os.path.join(APP_DIR, "config.json")
 
-# extension 文件夹：优先使用 APP_DIR 旁边的副本，否则用打包资源里的
-EXT_DIR = os.path.join(APP_DIR, "extension")
-if not os.path.isdir(EXT_DIR):
-    EXT_DIR = os.path.join(RESOURCE_DIR, "extension")
+def get_extension_dir():
+    """获取 Chrome 扩展目录；源码运行时优先使用项目内 extension。"""
+    source_ext = os.path.join(RESOURCE_DIR, "extension")
+    app_ext = os.path.join(APP_DIR, "extension")
+    if not getattr(sys, 'frozen', False) and os.path.isdir(source_ext):
+        return source_ext
+    if os.path.isdir(app_ext):
+        return app_ext
+    return source_ext
+
+
+EXT_DIR = get_extension_dir()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -253,16 +261,25 @@ def ensure_extension_accessible():
     """确保 extension 文件夹在用户可访问的位置"""
     global EXT_DIR
     target = os.path.join(APP_DIR, "extension")
-    if os.path.isdir(target):
+    src = os.path.join(RESOURCE_DIR, "extension")
+
+    if not getattr(sys, 'frozen', False) and os.path.isdir(src):
+        EXT_DIR = src
+        return
+
+    if os.path.abspath(src) == os.path.abspath(target):
         EXT_DIR = target
         return
 
-    # 从打包资源中复制 extension 到 APP_DIR 旁边
-    src = os.path.join(RESOURCE_DIR, "extension")
+    # 从打包资源中同步 extension 到 APP_DIR 旁边，避免升级后仍加载旧扩展。
     if os.path.isdir(src):
         import shutil
-        shutil.copytree(src, target)
-        logger.info(f"已将 extension 复制到: {target}")
+        shutil.copytree(src, target, dirs_exist_ok=True)
+        logger.info(f"已将 extension 同步到: {target}")
+        EXT_DIR = target
+        return
+
+    if os.path.isdir(target):
         EXT_DIR = target
 
 

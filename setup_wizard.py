@@ -33,7 +33,24 @@ def get_app_dir():
     return d
 
 
+def get_resource_dir():
+    """获取打包资源目录；源码运行时为项目目录。"""
+    if getattr(sys, '_MEIPASS', None):
+        return sys._MEIPASS
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def get_extension_dir():
+    """获取向导中提示用户加载的 Chrome 扩展目录。"""
+    source_ext = os.path.join(RESOURCE_DIR, "extension")
+    if not getattr(sys, 'frozen', False) and os.path.isdir(source_ext):
+        return source_ext
+    return os.path.join(APP_DIR, "extension")
+
+
 APP_DIR = get_app_dir()
+RESOURCE_DIR = get_resource_dir()
+EXTENSION_DIR = get_extension_dir()
 CONFIG_FILE = os.path.join(APP_DIR, "config.json")
 
 HOME = os.path.expanduser("~")
@@ -319,9 +336,8 @@ class SetupWizard:
                 side="left", fill="x", expand=True)
 
         # 提示：extension 文件夹位置
-        ext_dir = os.path.join(APP_DIR, "extension")
         tk.Label(self.content_frame,
-                 text=f"💡 extension 文件夹路径：{ext_dir}",
+                 text=f"💡 extension 文件夹路径：{EXTENSION_DIR}",
                  font=FONT(11), fg=C["accent"], bg=C["bg"],
                  anchor="w", wraplength=640).pack(fill="x", pady=(10, 0))
 
