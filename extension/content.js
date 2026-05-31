@@ -508,6 +508,269 @@ function extractDiscoveredGraphQLOperationIds() {
 }
 
 let runtimeConfig = null;
+let floatingSaveButtonState = null;
+let floatingSaveButtonStateLoaded = false;
+let floatingSaveButtonStateLoading = false;
+let floatingSaveButtonDragSession = null;
+let suppressNextFloatingSaveClick = false;
+let floatingSaveConfirmTimer = null;
+let linuxDoLikeConfirmTimer = null;
+
+function getFloatingSaveButtonStorage() {
+    if (typeof chrome === "undefined" || !chrome.storage?.local) return null;
+    return chrome.storage.local;
+}
+
+function getCurrentFloatingSaveButtonState() {
+    if (!floatingSaveButtonState) {
+        floatingSaveButtonState = getDefaultFloatingSaveButtonState(window);
+    }
+    floatingSaveButtonState = normalizeFloatingSaveButtonState(floatingSaveButtonState, window);
+    return floatingSaveButtonState;
+}
+
+function loadFloatingSaveButtonState() {
+    if (floatingSaveButtonStateLoaded || floatingSaveButtonStateLoading) return;
+    const storage = getFloatingSaveButtonStorage();
+    if (!storage) {
+        floatingSaveButtonStateLoaded = true;
+        floatingSaveButtonState = getCurrentFloatingSaveButtonState();
+        return;
+    }
+
+    floatingSaveButtonStateLoading = true;
+    storage.get(FLOATING_SAVE_BUTTON_STATE_KEY, (items) => {
+        floatingSaveButtonStateLoading = false;
+        floatingSaveButtonStateLoaded = true;
+        const saved = items?.[FLOATING_SAVE_BUTTON_STATE_KEY];
+        floatingSaveButtonState = saved
+            ? normalizeFloatingSaveButtonState(saved, window)
+            : getCurrentFloatingSaveButtonState();
+        ensureFloatingSaveButton();
+    });
+}
+
+function saveFloatingSaveButtonState(state) {
+    const normalized = normalizeFloatingSaveButtonState(state, window);
+    floatingSaveButtonState = normalized;
+    const storage = getFloatingSaveButtonStorage();
+    if (storage) {
+        storage.set({ [FLOATING_SAVE_BUTTON_STATE_KEY]: normalized });
+    }
+    return normalized;
+}
+
+function applyFloatingSaveButtonState(btn, siteConfig) {
+    const state = getCurrentFloatingSaveButtonState();
+    const confirming = isFloatingSaveButtonConfirming(btn);
+    const compact = !confirming && isFloatingSaveButtonEdgeMode(state);
+    const size = confirming ? { width: 58, height: 42 } : getFloatingSaveButtonSize(state);
+    const maxX = Math.max(8, window.innerWidth - size.width - 8);
+    const x = confirming
+        ? Math.min(Math.max(8, state.x - 8), maxX)
+        : state.x;
+
+    btn.style.left = `${x}px`;
+    btn.style.top = `${state.y}px`;
+    btn.style.right = "auto";
+    btn.style.width = `${size.width}px`;
+    btn.style.height = `${size.height}px`;
+    btn.style.padding = "0";
+    btn.style.background = confirming ? "#dc2626" : siteConfig.background;
+    btn.style.boxShadow = compact
+        ? `0 8px 20px ${siteConfig.shadow}`
+        : `0 10px 24px ${confirming ? "rgba(220, 38, 38, 0.35)" : siteConfig.shadow}`;
+    btn.style.borderRadius = compact
+        ? (state.edge === "left" ? "0 999px 999px 0" : "999px 0 0 999px")
+        : "999px";
+    btn.style.fontSize = compact ? "16px" : "12px";
+    btn.style.fontWeight = compact ? "900" : "700";
+    btn.style.letterSpacing = compact ? "0" : ".04em";
+    btn.style.lineHeight = `${size.height}px`;
+    btn.style.textAlign = "center";
+    btn.style.cursor = confirming ? "pointer" : "grab";
+    btn.textContent = confirming ? "确认" : (compact ? (state.edge === "left" ? "›" : "‹") : siteConfig.label);
+    btn.title = confirming
+        ? "再次点击确认保存，几秒后自动取消"
+        : compact
+        ? `${siteConfig.title}（贴边模式：拖动移动，右键恢复 MD 按钮）`
+        : `${siteConfig.title}（拖动移动，右键切换贴边小箭头）`;
+}
+
+function setFloatingSaveButtonState(nextState, options = {}) {
+    floatingSaveButtonState = normalizeFloatingSaveButtonState(nextState, window);
+    const btn = document.getElementById(SITE_FLOATING_SAVE_BUTTON_ID);
+    const siteConfig = getFloatingSaveSiteConfig(btn?.dataset.siteKey);
+    if (btn && siteConfig) {
+        applyFloatingSaveButtonState(btn, siteConfig);
+    }
+    if (options.persist !== false) {
+        saveFloatingSaveButtonState(floatingSaveButtonState);
+    }
+}
+
+function toggleFloatingSaveButtonMode() {
+    const state = getCurrentFloatingSaveButtonState();
+    setFloatingSaveButtonState(
+        isFloatingSaveButtonEdgeMode(state)
+            ? expandFloatingSaveButtonState(state, window)
+            : collapseFloatingSaveButtonState(state, window)
+    );
+}
+
+function beginFloatingSaveButtonDrag(event, btn) {
+    if (event.button !== 0) return;
+    const state = getCurrentFloatingSaveButtonState();
+    floatingSaveButtonDragSession = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        state,
+        moved: false,
+    };
+    btn.setPointerCapture?.(event.pointerId);
+}
+
+function updateFloatingSaveButtonDrag(event) {
+    const session = floatingSaveButtonDragSession;
+    if (!session || event.pointerId !== session.pointerId) return;
+
+    const dx = event.clientX - session.startX;
+    const dy = event.clientY - session.startY;
+    if (!session.moved && Math.hypot(dx, dy) < 4) return;
+
+    session.moved = true;
+    const compact = isFloatingSaveButtonEdgeMode(session.state);
+    const nextState = compact
+        ? {
+            ...session.state,
+            edge: getFloatingSaveButtonEdgeFromX(event.clientX, window),
+            y: session.state.y + dy,
+        }
+        : {
+            ...session.state,
+            x: session.state.x + dx,
+            y: session.state.y + dy,
+        };
+
+    event.preventDefault();
+    setFloatingSaveButtonState(nextState, { persist: false });
+}
+
+function finishFloatingSaveButtonDrag(event, btn) {
+    const session = floatingSaveButtonDragSession;
+    if (!session || event.pointerId !== session.pointerId) return;
+
+    btn.releasePointerCapture?.(event.pointerId);
+    floatingSaveButtonDragSession = null;
+    btn.style.cursor = "grab";
+
+    if (session.moved) {
+        suppressNextFloatingSaveClick = true;
+        saveFloatingSaveButtonState(getCurrentFloatingSaveButtonState());
+        setTimeout(() => {
+            suppressNextFloatingSaveClick = false;
+        }, 250);
+    }
+}
+
+function bindFloatingSaveButtonInteractions(btn) {
+    if (btn.__fx2md_floating_bound) return;
+    btn.__fx2md_floating_bound = true;
+
+    btn.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        btn.style.cursor = "grabbing";
+        beginFloatingSaveButtonDrag(event, btn);
+    });
+    btn.addEventListener("pointermove", updateFloatingSaveButtonDrag);
+    btn.addEventListener("pointerup", (event) => finishFloatingSaveButtonDrag(event, btn));
+    btn.addEventListener("pointercancel", (event) => finishFloatingSaveButtonDrag(event, btn));
+    btn.addEventListener("mouseenter", () => {
+        btn.style.opacity = "0.92";
+    });
+    btn.addEventListener("mouseleave", () => {
+        btn.style.opacity = "1";
+    });
+    btn.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        clearFloatingSaveButtonConfirmation(btn);
+        toggleFloatingSaveButtonMode();
+    });
+    btn.addEventListener("click", () => {
+        if (suppressNextFloatingSaveClick) {
+            suppressNextFloatingSaveClick = false;
+            return;
+        }
+        if (!isFloatingSaveButtonConfirming(btn)) {
+            startFloatingSaveButtonConfirmation(btn);
+            return;
+        }
+        clearFloatingSaveButtonConfirmation(btn);
+        runWhenLocalServerOnline(() => handleFloatingSave(btn.dataset.siteKey));
+    });
+}
+
+function isFloatingSaveButtonConfirming(btn) {
+    return btn?.__fx2md_confirm_save === true;
+}
+
+function startFloatingSaveButtonConfirmation(btn) {
+    btn.__fx2md_confirm_save = true;
+    const siteConfig = getFloatingSaveSiteConfig(btn.dataset.siteKey);
+    if (siteConfig) {
+        applyFloatingSaveButtonState(btn, siteConfig);
+    }
+    showToast("再次点击确认保存", "loading", 3500);
+    clearTimeout(floatingSaveConfirmTimer);
+    floatingSaveConfirmTimer = setTimeout(() => {
+        clearFloatingSaveButtonConfirmation(btn);
+    }, 3500);
+}
+
+function clearFloatingSaveButtonConfirmation(btn) {
+    clearTimeout(floatingSaveConfirmTimer);
+    floatingSaveConfirmTimer = null;
+    if (!btn || !isFloatingSaveButtonConfirming(btn)) return;
+    btn.__fx2md_confirm_save = false;
+    const siteConfig = getFloatingSaveSiteConfig(btn.dataset.siteKey);
+    if (siteConfig) {
+        applyFloatingSaveButtonState(btn, siteConfig);
+    }
+}
+
+function runWhenLocalServerOnline(callback) {
+    chrome.runtime.sendMessage({ action: "ping" }, (resp) => {
+        if (chrome.runtime.lastError) {
+            showToast("扩展通信失败，请重试", "error", 4000);
+            return;
+        }
+        if (!resp?.online) {
+            showToast("本地 FX2md 服务未连接，请先启动托盘程序", "error", 5000);
+            return;
+        }
+        callback();
+    });
+}
+
+function confirmAndRunLinuxDoPostSave(btn) {
+    if (!btn.__fx2md_confirm_save) {
+        btn.__fx2md_confirm_save = true;
+        showToast("再次点击确认保存 LINUX DO 帖子", "loading", 3500);
+        clearTimeout(linuxDoLikeConfirmTimer);
+        linuxDoLikeConfirmTimer = setTimeout(() => {
+            btn.__fx2md_confirm_save = false;
+        }, 3500);
+        return;
+    }
+
+    clearTimeout(linuxDoLikeConfirmTimer);
+    linuxDoLikeConfirmTimer = null;
+    btn.__fx2md_confirm_save = false;
+    runWhenLocalServerOnline(() => {
+        setTimeout(() => captureLinuxDoPost(btn), 250);
+    });
+}
 
 function requestRuntimeConfig() {
     if (runtimeConfig) {
@@ -2866,6 +3129,7 @@ function ensureFloatingSaveButton() {
     const siteKey = detectFloatingSaveSite();
     const enabled = isFloatingSaveIconEnabled(runtimeConfig || {});
     let btn = document.getElementById(SITE_FLOATING_SAVE_BUTTON_ID);
+    loadFloatingSaveButtonState();
 
     if (!siteKey || !enabled) {
         btn?.remove();
@@ -2884,36 +3148,20 @@ function ensureFloatingSaveButton() {
         btn.type = "button";
         Object.assign(btn.style, {
             position: "fixed",
-            top: "96px",
-            right: "24px",
-            width: "42px",
-            height: "42px",
             border: "none",
-            borderRadius: "999px",
             color: "#fff",
-            fontSize: "12px",
-            fontWeight: "700",
-            letterSpacing: ".04em",
-            cursor: "pointer",
+            cursor: "grab",
             zIndex: "2147483646",
-            boxShadow: "0 10px 24px rgba(0,0,0,.18)",
-            transition: "transform .15s ease, opacity .15s ease",
+            userSelect: "none",
+            touchAction: "none",
+            transition: "opacity .15s ease, box-shadow .15s ease",
         });
-        btn.addEventListener("mouseenter", () => {
-            btn.style.transform = "translateY(-1px)";
-        });
-        btn.addEventListener("mouseleave", () => {
-            btn.style.transform = "translateY(0)";
-        });
-        btn.addEventListener("click", () => handleFloatingSave(btn.dataset.siteKey));
+        bindFloatingSaveButtonInteractions(btn);
         document.body.appendChild(btn);
     }
 
     btn.dataset.siteKey = siteKey;
-    btn.textContent = siteConfig.label;
-    btn.title = siteConfig.title;
-    btn.style.background = siteConfig.background;
-    btn.style.boxShadow = `0 10px 24px ${siteConfig.shadow}`;
+    applyFloatingSaveButtonState(btn, siteConfig);
 }
 
 // ─────────────────────────────────────────────
@@ -2960,11 +3208,19 @@ document.addEventListener("click", (event) => {
     if (!isLinuxDoTopicPage()) return;
     const btn = event.target?.closest?.(LINUX_DO_LIKE_SELECTOR);
     if (!btn) return;
-    setTimeout(() => captureLinuxDoPost(btn), 250);
+    confirmAndRunLinuxDoPostSave(btn);
 }, true);
 
 const observer = new MutationObserver(scheduleBindAll);
 observer.observe(document.body, { childList: true, subtree: true });
+window.addEventListener("resize", () => {
+    floatingSaveButtonState = normalizeFloatingSaveButtonState(getCurrentFloatingSaveButtonState(), window);
+    const btn = document.getElementById(SITE_FLOATING_SAVE_BUTTON_ID);
+    const siteConfig = getFloatingSaveSiteConfig(btn?.dataset.siteKey);
+    if (btn && siteConfig) {
+        applyFloatingSaveButtonState(btn, siteConfig);
+    }
+});
 requestRuntimeConfig();
 bindAll();
 

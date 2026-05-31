@@ -16,6 +16,19 @@ const SERVER_BASE = "http://127.0.0.1:9527";
 const TWITTER_BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
 const GRAPHQL_DISCOVERY_CACHE = new Map();
 const PLAIN_TEXT_TRANSLATE_CHUNK_SIZE = 2600;
+const LOCAL_SERVER_UNAVAILABLE_MESSAGE = "本地 FX2md 服务未连接，请先启动 FX2md 托盘程序或运行 python tray_app.py。";
+
+function isLocalServerFetchError(error) {
+    const message = String(error?.message || error || "");
+    return error instanceof TypeError && /fetch/i.test(message);
+}
+
+function formatSaveError(error) {
+    if (isLocalServerFetchError(error)) {
+        return LOCAL_SERVER_UNAVAILABLE_MESSAGE;
+    }
+    return error?.message || String(error);
+}
 
 function hasDiscoveredOperationIds(ids) {
     return Array.isArray(ids?.TweetDetail) && ids.TweetDetail.length > 0 ||
@@ -1014,8 +1027,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 sendResponse({ success: json.success !== false, result: json });
 
             } catch (err) {
-                console.error("[fx2md] 后台处理或请求失败：", err);
-                sendResponse({ success: false, error: err.message || String(err) });
+                const error = formatSaveError(err);
+                if (isLocalServerFetchError(err)) {
+                    console.warn("[fx2md] 本地服务未连接，保存已取消。");
+                } else {
+                    console.error("[fx2md] 后台处理或请求失败：", err);
+                }
+                sendResponse({ success: false, error });
             }
         })();
         // 必须返回 true 以保持消息通道开启，否则 async 块内部的 sendResponse 将因为通道关闭而失败，产生 content 侧一直 Loading
@@ -1084,7 +1102,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 const json = await resp.json();
                 sendResponse({ success: json.success !== false, result: json });
             } catch (err) {
-                sendResponse({ success: false, error: err.message || String(err) });
+                sendResponse({ success: false, error: formatSaveError(err) });
             }
         })();
         return true;

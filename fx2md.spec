@@ -89,7 +89,7 @@ if sys.platform == 'darwin':
         info_plist={
             'CFBundleName': 'FX2md',
             'CFBundleDisplayName': 'FX2md',
-            'CFBundleShortVersionString': '1.2',
+            'CFBundleShortVersionString': '1.2.1',
             'LSUIElement': True,  # 无 Dock 图标，仅菜单栏显示
         },
     )
